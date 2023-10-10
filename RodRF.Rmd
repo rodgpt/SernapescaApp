@@ -1,0 +1,179 @@
+---
+title: "Untitled"
+author: "Rod"
+date: "2023-09-13"
+output: html_document
+---
+
+
+Data
+```{r}
+pacman::p_load(
+  janitor,
+  tidymodels,
+  tidyverse,
+  StanHeaders,
+  ranger,
+  lubridate
+)
+setwd("~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML")
+raw_data <- read.csv("Binomial_dataset2.csv")      %>% # Modify here to read from correct folder
+  clean_names()
+
+# Trim observations and build a factor version for classification
+raw_data$tiempo = raw_data$tiempo/60
+illegal <- raw_data %>%
+  drop_na() %>%                                                                 # Remove all observations with NA
+  filter(!agente == "Sin_Actividad") %>%                                        # Remove agente sin actividad
+  mutate(f_respuesta = as.factor(ifelse(respuesta == 1, "Si", "No")),           # Recode 0 and 1 to a factor
+         ano = as.factor(ano))                                                  # Recode year as factor
+
+##Get week
+AA=parse_date_time(illegal$fecha, orders   = c('dmy HM', 'Ymd','dmY HM' , 'dmY HMS', 'Ymd HMS'))
+BB = format(as.POSIXct(AA, format = '%d/%m/%Y %H:%M:%S'),format = '%Y/%m/%d')
+illegal$semana<- week(BB)
+
+##Get day of the week
+illegal$dia <-wday(BB)
+
+#write.csv(illegal, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/illegal.csv")
+
+# Build training (70%) and testing (30%) data sets
+
+set.seed(1)                                                                     # Random seed
+illegal_split <- initial_split(data = illegal,
+                               prop = 0.7,                                     # Proportion dstined for training
+                               strata = especie)                             # Stratified sampling to make sure we get 70% of each species. Just as good practice
+illegal_train <- training(illegal_split)                                        # Extract the training set
+illegal_test  <-  testing(illegal_split)                                        # Extract the testing set
+```
+
+Model
+```{r}
+## BUILD ML PIPELINE -----------------------------------------------------------
+# Define the "recipe", made up of the formulation and data transformations
+illegal_rec <-
+  recipe(
+    # Formula relating the (factor)response to relevant variables used in the hierarchical bayesian model
+    formula = f_respuesta ~ tiempo + n_fiscalizadores_por_cometido +  agente + especie + region  + oficina + semana + dia,
+    data = illegal_train) %>%
+  # Add a step to transfomr "tiempo" and "n_fiscalizadores_por_cometido" to be between 0 and 1
+  #step_range(min = 0,
+   #          max = 1,
+    #         ranges = c("tiempo", "n_fiscalizadores_por_cometido")) #%>%
+  # Add a step to allow for species to change in the future (e.g. if the prediction is made for a species not included here)
+  step_novel(especie)
+
+# Define the model specification
+rf_model <- rand_forest(trees =250, min_n = 5, mtry = NULL) %>%
+  set_engine("ranger", class.weights = c(Si = 0.9, No = 0.1)) %>%
+  set_mode("classification")
+
+workflow <-
+  workflow() %>%
+  add_model(rf_model) %>%                                                       # Adds the model as defined
+  add_recipe(illegal_rec)                                                       # Adds the recipe we defined
+
+# Fit the model ----------------------------------------------------------------
+rf_fit <- fit(
+  object = workflow,                                                            # What to fit?
+  data = illegal_train                                                          # What to fit it to
+)
+
+# See model output
+rf_fit 
+
+saveRDS(rf_fit, file = "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/rf_fit_model.rds", compress = "xz")
+```
+
+
+```{r}
+prob_predictions <- predict(rf_fit, illegal_train, type = "prob")
+adjusted_predictions <- ifelse(prob_predictions$.pred_Si > 0.28, "Si", "No")
+library(caret)
+conf_matrix <- confusionMatrix(as.factor(adjusted_predictions), illegal_train$f_respuesta, mode = "everything", positive="Si")
+print(conf_matrix)
+
+results=matrix(0,100,4)
+for (cr in 1:100){
+  crit= cr/100
+  predicted_violations = ifelse(prob_predictions$.pred_Si >crit, "Si","No")
+  F1=confusionMatrix(as.factor(predicted_violations), illegal_train$f_respuesta, mode = "everything", positive="Si")
+  F11=F1$byClass["F1"]
+  results[cr,1]=crit
+  results[cr,2]=F11
+  
+}
+plot(results[,1],results[,2], ylab="F1", xlab="Threshold")
+(which.max(results[,2]))/100
+
+
+results=matrix(0,100,4)
+prob_predictions <- predict(rf_fit, illegal_test, type = "prob")
+for (cr in 1:100){
+  crit= cr/100
+  predicted_violations = ifelse(prob_predictions$.pred_Si >crit, "Si","No")
+  F1=confusionMatrix(as.factor(predicted_violations), illegal_test$f_respuesta, mode = "everything", positive="Si")
+  F11=F1$byClass["F1"]
+  results[cr,1]=crit
+  results[cr,2]=F11
+  
+}
+plot(results[,1],results[,2], ylab="F1", xlab="Threshold")
+aa=(which.max(results[,2]))/100
+adjusted_predictions <- ifelse(prob_predictions$.pred_Si > aa, "Si", "No")
+
+conf_matrix <- confusionMatrix(as.factor(adjusted_predictions), illegal_test$f_respuesta, mode = "everything", positive="Si")
+print(conf_matrix)
+###I can improve the F1 a lot, from 0.4 to 0.85. But the predictive capacity is only around 0.3 (F1)
+
+```
+
+Species Model
+```{r}
+## BUILD ML PIPELINE -----------------------------------------------------------
+# Define the "recipe", made up of the formulation and data transformations
+illegal_rec <-
+  recipe(
+    # Formula relating the (factor)response to relevant variables used in the hierarchical bayesian model
+    formula = f_respuesta ~  especie ,
+    data = illegal_train) %>%
+  # Add a step to transfomr "tiempo" and "n_fiscalizadores_por_cometido" to be between 0 and 1
+  #step_range(min = 0,
+   #          max = 1,
+    #         ranges = c("tiempo", "n_fiscalizadores_por_cometido")) #%>%
+  # Add a step to allow for species to change in the future (e.g. if the prediction is made for a species not included here)
+  step_novel(especie)
+
+# Define the model specification
+rf_model <- rand_forest(trees = 1000, min_n = 5, mtry = NULL) %>%
+  set_engine("ranger", class.weights = c(Si = 0.9, No = 0.1)) %>%
+  set_mode("classification")
+
+workflow <-
+  workflow() %>%
+  add_model(rf_model) %>%                                                       # Adds the model as defined
+  add_recipe(illegal_rec)                                                       # Adds the recipe we defined
+
+# Fit the model ----------------------------------------------------------------
+rf_fit2 <- fit(
+  object = workflow,                                                            # What to fit?
+  data = illegal_train                                                          # What to fit it to
+)
+
+# Create a new dataset with one row for each unique species
+data_for_avg_prob <- tibble(especie = unique(illegal$especie))
+
+# Use the existing rf_fit model to predict for this dataset
+predictions <- predict(rf_fit2, data_for_avg_prob, type="prob")
+
+# Extract the probabilities (assuming second column has the desired probabilities)
+predictions[,1] <- data_for_avg_prob$especie
+average_probabilities = predictions
+predictions[,2] = predictions[,2]*100
+write.csv(predictions, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/species.csv")
+
+```
+
+
+
