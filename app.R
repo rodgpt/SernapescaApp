@@ -13,9 +13,9 @@ library(readr)
 
 
 
-rsconnect::setAccountInfo(name='perfilesderiesgo',
-                          token='3532D8313FD973C7F6C3DD342943285E',
-                          secret='7rLz7usfFbpZFubLzLBgoOowb9KpL46cWBzWqp8v')# Set working directory and load data and model
+#rsconnect::setAccountInfo(name='perfilesderiesgo',
+                         # token='3532D8313FD973C7F6C3DD342943285E',
+                        #  secret='7rLz7usfFbpZFubLzLBgoOowb9KpL46cWBzWqp8v')# Set working directory and load data and model
 #setwd("~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/SernapescaApp")
 rf_fit <- read_rds("rf_fit_model.rds")
 illegal = read.csv("illegal.csv")
