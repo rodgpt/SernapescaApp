@@ -5,7 +5,7 @@ account: perfilesderiesgo
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 10141882
-bundleId: 7783151
+bundleId: 7791492
 url: https://perfilesderiesgo.shinyapps.io/SernapescaApp/
 version: 1
 asMultiple: FALSE

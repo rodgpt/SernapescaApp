@@ -35,11 +35,19 @@ illegal <- raw_data %>%
 AA=parse_date_time(illegal$fecha, orders   = c('dmy HM', 'Ymd','dmY HM' , 'dmY HMS', 'Ymd HMS'))
 BB = format(as.POSIXct(AA, format = '%d/%m/%Y %H:%M:%S'),format = '%Y/%m/%d')
 illegal$semana<- week(BB)
-
 ##Get day of the week
 illegal$dia <-wday(BB)
 
-#write.csv(illegal, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/illegal.csv")
+
+###Extract  time of the day (hour) only from AA 
+cc= format(as.POSIXct(AA, format = '%d/%m/%Y %H:%M:%S'),format = '%H:%M:%S')
+### COnvert cc into three time slots: Manana, Tarde, Noche
+dd= ifelse(cc>="06:00:00" & cc<="12:00:00", "Mañana (6:00 - 12:00)", ifelse(cc>="12:00:00" & cc<="18:00:00", "Tarde (12:00-18:00)", "Noche (>18:00)"))
+
+###Convert cc into the nearest hour, for instance if 08:30 convert to 08:00
+illegal$hora <- format(as.POSIXct(cc, format = '%H:%M:%S'),format = '%H:00')
+
+#write.csv(illegal, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/SernapescaApp/illegal.csv")
 
 # Build training (70%) and testing (30%) data sets
 
@@ -58,7 +66,7 @@ Model
 illegal_rec <-
   recipe(
     # Formula relating the (factor)response to relevant variables used in the hierarchical bayesian model
-    formula = f_respuesta ~ tiempo + n_fiscalizadores_por_cometido +  agente + especie + region  + oficina + semana + dia,
+    formula = f_respuesta ~ tiempo + n_fiscalizadores_por_cometido +  agente + especie + region  + oficina + semana + dia + hora,
     data = illegal_train) %>%
   # Add a step to transfomr "tiempo" and "n_fiscalizadores_por_cometido" to be between 0 and 1
   #step_range(min = 0,
@@ -69,7 +77,8 @@ illegal_rec <-
 
 # Define the model specification
 rf_model <- rand_forest(trees =250, min_n = 5, mtry = NULL) %>%
-  set_engine("ranger", class.weights = c(Si = 0.9, No = 0.1)) %>%
+  set_engine("ranger",importance = "impurity",  # or "permutation" for permutation importance
+class.weights = c(Si = 0.9, No = 0.1)) %>%
   set_mode("classification")
 
 workflow <-
@@ -86,10 +95,42 @@ rf_fit <- fit(
 # See model output
 rf_fit 
 
-#saveRDS(rf_fit, file = "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/rf_fit_model.rds", compress = "xz")
+#saveRDS(rf_fit, file = "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/SernapescaApp/rf_fit_model.rds", compress = "xz")
+```
+
+Variable importance
+```{r}
+# Extracting the fitted model
+model_fit <- rf_fit$fit$fit
+
+# Extracting feature importance
+importance <- model_fit$fit$variable.importance
+
+# Converting to data frame for ggplot
+importance_df <- data.frame(
+  Variable = names(importance),
+  Importance = importance
+)
+
+# Sorting by importance
+importance_df <- importance_df[order(-importance_df$Importance),]
+
+# Loading library
+library(ggplot2)
+
+# Creating a Feature Importance Plot
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Feature Importance Plot",
+       x = "Variable",
+       y = "Importance") +
+  theme_minimal()
+
 ```
 
 
+F1
 ```{r}
 prob_predictions <- predict(rf_fit, illegal_train, type = "prob")
 adjusted_predictions <- ifelse(prob_predictions$.pred_Si > 0.28, "Si", "No")
@@ -128,10 +169,12 @@ adjusted_predictions <- ifelse(prob_predictions$.pred_Si > aa, "Si", "No")
 
 conf_matrix <- confusionMatrix(as.factor(adjusted_predictions), illegal_test$f_respuesta, mode = "everything", positive="Si")
 print(conf_matrix)
-###I can improve the F1 a lot, from 0.4 to 0.85. But the predictive capacity is only around 0.3 (F1)
+###I can improve the F1 a lot, from 0.4 to 0.96. But the predictive capacity is only around 0.3 (F1)
 
 ```
-
+ 
+ 
+ 
  optimizing hyper parameters        
 ```{r}
 # Load necessary libraries
