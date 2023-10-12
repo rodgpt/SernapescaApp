@@ -20,7 +20,7 @@ species = read.csv("species.csv")
 ui <- fluidPage(
   
   titlePanel("App Predicción Infracciones"),
- tags$img(src='logos.png', height=200, width=600),
+ tags$img(src='logos.png', height=200, width=300),
   sidebarLayout(
     sidebarPanel(
       dateInput("input_date", "Fecha a Realizar el Cometido:", Sys.Date(), format = "dd/mm/yyyy"),
