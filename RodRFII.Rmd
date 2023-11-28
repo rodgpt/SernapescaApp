@@ -1,0 +1,287 @@
+---
+title: "Untitled"
+author: "Rod"
+date: "2023-09-13"
+output: html_document
+---
+
+Data
+```{r}
+pacman::p_load(
+  janitor,
+  tidymodels,
+  tidyverse,
+  StanHeaders,
+  ranger,
+  lubridate,
+  caret
+)
+
+raw_data <- read.csv('~/Dropbox/Back up todo/Sernapesca Project/Datos REAL YIEEEEA/Binomial_dataset3.csv')      %>% # Modify here to read from correct folder
+  clean_names()
+
+# Trim observations and build a factor version for classification
+illegal <- raw_data %>%
+  drop_na() %>%                                                                 # Remove all observations with NA
+  mutate(f_respuesta = as.factor(ifelse(variable_respuesta == 1, "Si", "No")),           # Recode 0 and 1 to a factor
+         ano = as.factor(ano))                                                  # Recode year as factor
+
+##Get week
+AA=parse_date_time(illegal$fc_inicio, orders   = c('dmy HM', 'Ymd','dmY HM' , 'dmY HMS', 'Ymd HMS'))
+BB = format(as.POSIXct(AA, format = '%d/%m/%Y %H:%M:%S'),format = '%Y/%m/%d')
+illegal$semana<- week(BB)
+##Get day of the week
+illegal$dia <-wday(BB)
+
+
+###Extract  time of the day (hour) only from AA 
+cc= format(as.POSIXct(AA, format = '%d/%m/%Y %H:%M:%S'),format = '%H:%M:%S')
+### COnvert cc into three time slots: Manana, Tarde, Noche
+dd= ifelse(cc>="06:00:00" & cc<="12:00:00", "Mañana (6:00 - 12:00)", ifelse(cc>="12:00:00" & cc<="18:00:00", "Tarde (12:00-18:00)", "Noche (>18:00)"))
+
+###Convert cc into the nearest hour, for instance if 08:30 convert to 08:00
+illegal$hora <- format(as.POSIXct(cc, format = '%H:%M:%S'),format = '%H:00')
+
+#write.csv(illegal, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/MLbyCometido/illegal.csv")
+
+# Build training (70%) and testing (30%) data sets
+
+set.seed(1)                                                                     # Random seed
+illegal_split <- initial_split(data = illegal,
+                               prop = 0.7,                                     # Proportion dstined for training
+                               strata = especie)                             # Stratified sampling to make sure we get 70% of each species. Just as good practice
+illegal_train <- training(illegal_split)                                        # Extract the training set
+illegal_test  <-  testing(illegal_split)                                        # Extract the testing set
+```
+
+Model
+```{r}
+## BUILD ML PIPELINE -----------------------------------------------------------
+# Define the "recipe", made up of the formulation and data transformations
+illegal_rec <-
+  recipe(
+    # Formula relating the (factor)response to relevant variables used in the hierarchical bayesian model
+    formula = f_respuesta ~ tiempo + distancia + n_acciones+ n_fisc+ institucion+ region + oficina + medida + especie + agente + nr_agente + semana + dia + hora +nm_usuario,
+    data = illegal_train) %>%
+  # Add a step to transfomr "tiempo" and "n_fiscalizadores_por_cometido" to be between 0 and 1
+  #step_range(min = 0,
+   #          max = 1,
+    #         ranges = c("tiempo", "n_fiscalizadores_por_cometido")) #%>%
+  # Add a step to allow for species to change in the future (e.g. if the prediction is made for a species not included here)
+  step_novel(especie, nr_agente, nm_usuario, institucion)
+
+# Define the model specification
+rf_model <- rand_forest(trees =250, min_n = 5, mtry = NULL) %>%
+  set_engine("ranger",importance = "impurity",  # or "permutation" for permutation importance
+class.weights = c(Si = 0.9, No = 0.1)) %>%
+  set_mode("classification")
+
+workflow <-
+  workflow() %>%
+  add_model(rf_model) %>%                                                       # Adds the model as defined
+  add_recipe(illegal_rec)                                                       # Adds the recipe we defined
+
+# Fit the model ----------------------------------------------------------------
+rf_fit <- fit(
+  object = workflow,                                                            # What to fit?
+  data = illegal_train                                                          # What to fit it to
+)
+
+# See model output
+rf_fit 
+
+#saveRDS(rf_fit, file = "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/MLbyCometido/rf_fit_model.rds", compress = "xz")
+
+```
+
+Variable importance
+```{r}
+# Extracting the fitted model
+model_fit <- rf_fit$fit$fit
+
+# Extracting feature importance
+importance <- model_fit$fit$variable.importance
+
+# Converting to data frame for ggplot
+importance_df <- data.frame(
+  Variable = names(importance),
+  Importance = importance
+)
+
+# Sorting by importance
+importance_df <- importance_df[order(-importance_df$Importance),]
+
+# Loading library
+library(ggplot2)
+
+# Creating a Feature Importance Plot
+ggplot(importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  labs(title = "Feature Importance Plot",
+       x = "Variable",
+       y = "Importance") +
+  theme_minimal()
+```
+
+
+F1
+```{r}
+prob_predictions <- predict(rf_fit, illegal_train, type = "prob")
+results=matrix(0,100,4)
+for (cr in 1:100){
+  crit= cr/100
+  predicted_violations = ifelse(prob_predictions$.pred_Si >crit, "Si","No")
+  F1=confusionMatrix(as.factor(predicted_violations), illegal_train$f_respuesta, mode = "everything", positive="Si")
+  F11=F1$byClass["F1"]
+  results[cr,1]=crit
+  results[cr,2]=F11
+  
+}
+plot(results[,1],results[,2], ylab="F1", xlab="Threshold")
+bb=(which.max(results[,2]))/100
+
+adjusted_predictions <- ifelse(prob_predictions$.pred_Si > bb, "Si", "No")
+conf_matrix <- confusionMatrix(as.factor(adjusted_predictions), illegal_train$f_respuesta, mode = "everything", positive="Si")
+print(conf_matrix)
+
+
+results=matrix(0,100,4)
+prob_predictions <- predict(rf_fit, illegal_test, type = "prob")
+for (cr in 1:100){
+  crit= cr/100
+  predicted_violations = ifelse(prob_predictions$.pred_Si >crit, "Si","No")
+  F1=confusionMatrix(as.factor(predicted_violations), illegal_test$f_respuesta, mode = "everything", positive="Si")
+  F11=F1$byClass["F1"]
+  results[cr,1]=crit
+  results[cr,2]=F11
+  
+}
+plot(results[,1],results[,2], ylab="F1", xlab="Threshold")
+aa=(which.max(results[,2]))/100
+adjusted_predictions <- ifelse(prob_predictions$.pred_Si > aa, "Si", "No")
+
+conf_matrix <- confusionMatrix(as.factor(adjusted_predictions), illegal_test$f_respuesta, mode = "everything", positive="Si")
+print(conf_matrix)
+###I can improve the F1 a lot, from 0.4 to 0.96. But the predictive capacity is only around 0.3 (F1)
+mean(prob_predictions$.pred_Si)
+
+```
+ 
+ 
+ 
+ optimizing hyper parameters        
+```{r}
+# Load necessary libraries
+library(tune)
+library(yardstick)
+library(dials)
+
+# Define the model specification with tune() placeholders for the parameters to be tuned
+rf_model <- rand_forest(
+    trees = tune(), 
+    min_n = tune(), 
+    mtry = tune()
+  ) %>%
+  set_engine("ranger", class.weights = c(Si = 0.9, No = 0.1)) %>%
+  set_mode("classification")
+
+workflow <-
+  workflow() %>%
+  add_model(rf_model) %>%                                                       # Adds the model as defined
+  add_recipe(illegal_rec)                                                       # Adds the recipe we defined
+
+# Create a grid of hyperparameters to search over
+rf_grid <- grid_regular(
+  trees(range = c(200, 500)),
+  min_n(range = c(1, 5)),
+  mtry(range = c(1, 3))
+ # levels = c(10, 20, 30)
+)
+
+# Define the resampling method - using 5-fold cross-validation here as an example
+cv_folds <- vfold_cv(illegal_train, v = 5)
+
+# Define a metric to optimize - F1 Score
+metric <- metric_set(f_meas)
+
+# Perform the grid search
+rf_tune_results <- tune_grid(
+  object = workflow,  # Your existing workflow
+  resamples = cv_folds,  # Resampling method
+  grid = rf_grid,  # Grid of hyperparameters
+  metrics = metric  # Metrics to optimize
+)
+
+# View the results
+rf_tune_results
+
+# Optionally, you can extract the best set of hyperparameters and re-train your model
+best_params <- select_best(rf_tune_results, "f_meas")
+
+rf_model<- rand_forest(trees =350, min_n = 1, mtry = 1) %>%
+  set_engine("ranger", class.weights = c(Si = 0.9, No = 0.1)) %>%
+  set_mode("classification")
+
+workflow <-
+  workflow() %>%
+  add_model(rf_model) %>%                                                       # Adds the model as defined
+  add_recipe(illegal_rec)                                                       # Adds the recipe we defined
+
+# Fit the model ----------------------------------------------------------------
+rf_fit <- fit(
+  object = workflow,                                                            # What to fit?
+  data = illegal_train                                                          # What to fit it to
+)
+
+# See model output
+rf_fit 
+
+
+
+```
+
+
+
+Species Model for comparisson
+```{r}
+## BUILD ML PIPELINE -----------------------------------------------------------
+# Define the "recipe", made up of the formulation and data transformations
+illegal_rec <-
+  recipe(
+    formula = f_respuesta ~  especie ,
+    data = illegal_train) %>%
+
+
+# Define the model specification
+rf_model <- rand_forest(trees = 1000, min_n = 5, mtry = NULL) %>%
+  set_engine("ranger", class.weights = c(Si = 0.9, No = 0.1)) %>%
+  set_mode("classification")
+
+workflow <-
+  workflow() %>%
+  add_model(rf_model) %>%                                                       # Adds the model as defined
+  add_recipe(illegal_rec)                                                       # Adds the recipe we defined
+
+# Fit the model ----------------------------------------------------------------
+rf_fit2 <- fit(
+  object = workflow,                                                            # What to fit?
+  data = illegal_train                                                          # What to fit it to
+)
+
+# Create a new dataset with one row for each unique species
+data_for_avg_prob <- tibble(especie = unique(illegal$especie))
+
+# Use the existing rf_fit model to predict for this dataset
+predictions <- predict(rf_fit2, data_for_avg_prob, type="prob")
+
+# Extract the probabilities (assuming second column has the desired probabilities)
+predictions[,1] <- data_for_avg_prob$especie
+average_probabilities = predictions
+predictions[,2] = predictions[,2]*100
+write.csv(predictions, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/species.csv")
+
+```
+
+
+
