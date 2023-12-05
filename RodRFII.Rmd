@@ -41,6 +41,7 @@ dd= ifelse(cc>="06:00:00" & cc<="12:00:00", "Mañana (6:00 - 12:00)", ifelse(cc>
 
 ###Convert cc into the nearest hour, for instance if 08:30 convert to 08:00
 illegal$hora <- format(as.POSIXct(cc, format = '%H:%M:%S'),format = '%H:00')
+illegal <- illegal[!(illegal$nm_flota %in% c("Recreativa", "Res.Animal")), ]
 
 #write.csv(illegal, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/MLbyCometido/illegal.csv")
 
@@ -52,6 +53,7 @@ illegal_split <- initial_split(data = illegal,
                                strata = especie)                             # Stratified sampling to make sure we get 70% of each species. Just as good practice
 illegal_train <- training(illegal_split)                                        # Extract the training set
 illegal_test  <-  testing(illegal_split)                                        # Extract the testing set
+table(raw_data$lugar)
 ```
 
 Model
@@ -71,7 +73,7 @@ illegal_rec <-
   step_novel(especie, nr_agente, nm_usuario, institucion)
 
 # Define the model specification
-rf_model <- rand_forest(trees =250, min_n = 5, mtry = NULL) %>%
+rf_model <- rand_forest(trees =500, min_n = 5, mtry = NULL) %>%
   set_engine("ranger",importance = "impurity",  # or "permutation" for permutation importance
 class.weights = c(Si = 0.9, No = 0.1)) %>%
   set_mode("classification")
@@ -282,6 +284,3 @@ predictions[,2] = predictions[,2]*100
 write.csv(predictions, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/species.csv")
 
 ```
-
-
-
