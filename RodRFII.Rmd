@@ -42,6 +42,7 @@ dd= ifelse(cc>="06:00:00" & cc<="12:00:00", "Mañana (6:00 - 12:00)", ifelse(cc>
 ###Convert cc into the nearest hour, for instance if 08:30 convert to 08:00
 illegal$hora <- format(as.POSIXct(cc, format = '%H:%M:%S'),format = '%H:00')
 illegal <- illegal[!(illegal$nm_flota %in% c("Recreativa", "Res.Animal")), ]
+illegal <- illegal[!(illegal$nr_agente %in% c("11.111.111-1")), ]
 
 #write.csv(illegal, "~/Dropbox/Back up todo/Sernapesca Project/Models and Data/MLbyCometido/illegal.csv")
 
