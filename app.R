@@ -6,12 +6,12 @@ library(shiny)
 library(lubridate)
 library(ranger)
 library(readr)
+library(RSQLite)
 
 #rsconnect::setAccountInfo(name='perfilesderiesgo',
                          # token='3532D8313FD973C7F6C3DD342943285E',
                         #  secret='7rLz7usfFbpZFubLzLBgoOowb9KpL46cWBzWqp8v')# Set working directory and load data and model
-
-#setwd("~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/SernapescaApp")
+setwd("~/Dropbox/Back up todo/Sernapesca Project/Models and Data/ML/SernapescaApp")
 rf_fit <- read_rds("rf_fit_model.rds")
 illegal = read.csv("illegal.csv")
 species = read.csv("species.csv")
@@ -20,7 +20,7 @@ species = read.csv("species.csv")
 ui <- fluidPage(
   
   titlePanel("App Predicción Infracciones"),
- tags$img(src='logos.png', height=200, width=300),
+ tags$img(src='logos.png', height=400, width=800),
   sidebarLayout(
     sidebarPanel(
       dateInput("input_date", "Fecha a Realizar el Cometido:", Sys.Date(), format = "dd/mm/yyyy"),
@@ -34,10 +34,15 @@ ui <- fluidPage(
       actionButton("predict", "Predecir")
     ),
     
+    
     mainPanel(
       uiOutput("prediction"),
       uiOutput("species_av"),
-      uiOutput("prediction_category")
+      uiOutput("prediction_category"), 
+      tags$hr(),
+      actionButton("feedback_btn", "Enviar Comentarios o Sugerencias"),
+      textInput("emailInput", "Enter your email to receive the prediction:", value = ""),
+      actionButton("sendEmail", "Send Prediction to Email")
     )
   )
 )
@@ -46,6 +51,8 @@ ui <- fluidPage(
 # Server component of the Shiny app
 server <- function(input, output, session) {
   
+    values <- reactiveValues(prediction_percentage = NULL)
+    
   # Update office choices based on selected region
   shiny :: observe({
     filtered_offices <- illegal %>% 
@@ -108,6 +115,11 @@ server <- function(input, output, session) {
     prediction <- predict(rf_fit, new_data, type="prob")
     prediction_percentage <- (prediction[1,2]) * 100
     
+        # After calculating prediction_percentage
+    values$prediction_percentage <- as.character(prediction_percentage)  # Convert to character for safety
+    
+
+    
     aa = input$especie
     avg_prob <- subset(species, species$.pred_No == aa) 
     avg_prob <- avg_prob$.pred_Si 
@@ -162,6 +174,37 @@ server <- function(input, output, session) {
       )
     })
     
+    observeEvent(input$feedback_btn, {
+      showModal(modalDialog(
+        title = "Enviar Comentarios o Sugerencias",
+        textAreaInput("feedback_text", "Comentario:", "", width = "100%", height = "200px"),
+        actionButton("submit_feedback", "Enviar"),
+        footer = NULL
+      ))
+    })
+    
+    observeEvent(input$submit_feedback, {
+      feedback <- input$feedback_text
+      print(feedback)
+      removeModal()
+    })
+    
+   # observeEvent(input$submit_feedback, {
+    #  feedback <- input$feedback_text
+      
+      # Connect to the SQLite database
+     # con <- dbConnect(SQLite(), "feedback.db")
+      
+      # Insert feedback into the database
+      #dbWriteTable(con, "feedbacks", data.frame(id = NULL, feedback = feedback), append = TRUE)
+      
+      # Disconnect from the database
+      #dbDisconnect(con)
+      
+      # Close the feedback modal
+      #removeModal()
+    #})
+
     output$species_av <- renderUI({
       tagList(
         h3("Promedio", aa, style="color:black;", style="font-size: 18px;"),
@@ -178,7 +221,31 @@ server <- function(input, output, session) {
     }) 
     removeModal()
   })
-}
 
+# Email sending logic
+observeEvent(input$sendEmail, {
+  require(mailR)
+
+  # Prepare the email content
+  emailBody <- paste("Prediction result: ", values$prediction_percentage, "%", sep="")
+  
+  # Send the email
+  send.mail(
+    from = "sistema.alertas.sernapesca@gmail.com",
+    to = input$emailInput,
+    subject = paste("Alert: Current Temperature Exceeds", threshold, "C"),
+    body = emailBody,
+    smtp = list(
+      host.name = "smtp.gmail.com",
+      port = 587,
+      user.name = "sistema.alertas.sernapesca@gmail.com",
+      passwd = "ipay ncfw zyre noxd",
+      ssl = TRUE
+    ),
+    authenticate = TRUE,
+    send = TRUE
+  )
+})
+}
 # Run the Shiny app
 shinyApp(ui, server)
